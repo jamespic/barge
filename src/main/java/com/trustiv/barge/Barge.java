@@ -1,8 +1,11 @@
 package com.trustiv.barge;
 
 import com.zaxxer.hikari.util.ConcurrentBag;
+//import com.zaxxer.hikari.util.IBagStateListener;
+//import com.zaxxer.hikari.util.IConcurrentBagEntry;
 import org.apache.commons.math3.stat.descriptive.rank.Percentile;
 import org.apache.commons.math3.stat.inference.KolmogorovSmirnovTest;
+//import com.zaxxer.hikari.util.Java8ConcurrentBag;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -10,13 +13,16 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class Barge {
-    public static final int ITERATIONS = 100000;
+    public static final int ITERATIONS = 200000;
     public static final int WORKERS = 2; // Running on an 8 core machine, so shouldn't need to be pre-empted
     public static void main(String[] args) throws Exception {
         final Timestamper ts = new FairLockTimestamper();
-        final ConcurrentBag<ManagableAsset> bag = new ConcurrentBag<>();
+        //final Timestamper ts = new AtomicLongTimestamper();
+        //final Timestamper ts = new NanoTimeTimestamper();
+        final ConcurrentBag<ManagableAsset> bag = new ConcurrentBag<>(new DummyListener());
+        //final ConcurrentBag<ManagableAsset> bag = (ConcurrentBag) new Java8ConcurrentBag(new DummyListener()); // Dirty casting hackery to support 2.3.12
         //final BlockingQueue<ManagableAsset> queue = new ArrayBlockingQueue<>(1, true);
-        //final BlockingQueue<ManagableAsset> queue = new ReallyUnfairQueue();
+        //final BlockingQueue<ManagableAsset> queue = new ReallyUnfairQueue<>();
 
         List<Worker> workers = new ArrayList<>(WORKERS);
         for (int i = 0; i < WORKERS; i++) workers.add(new Worker(ts, bag));
@@ -88,8 +94,9 @@ public class Barge {
         public final double[] startTimestamps = new double[ITERATIONS];
         public final double[] endTimestamps = new double[ITERATIONS];
         private final Timestamper ts;
-        private final ConcurrentBag<ManagableAsset> bag;
         //private final BlockingQueue<ManagableAsset> queue;
+        private final ConcurrentBag<ManagableAsset> bag;
+        private int wasteTimeSource = 0;
 
         private Worker(Timestamper ts, ConcurrentBag<ManagableAsset> bag) {
         //private Worker(Timestamper ts, BlockingQueue<ManagableAsset> queue) {
@@ -111,6 +118,7 @@ public class Barge {
                         //asset = queue.poll(100, TimeUnit.MILLISECONDS);
                     }
                     endTimestamps[i] = ts.getTs();
+                    wasteTime(2000);
                     bag.requite(asset);
                     //queue.put(asset);
                 } catch (InterruptedException e) {
@@ -119,19 +127,66 @@ public class Barge {
 
             }
         }
+
+        private void wasteTime(int iterations) {
+            for (int i = 0; i < iterations; i++)
+                wasteTimeSource = wasteTimeSource * 768756959 + 21524963;
+        }
     }
 
-    public static final class ManagableAsset implements ConcurrentBag.IBagManagable {
+    public static final class ManagableAsset implements ConcurrentBag.IConcurrentBagEntry {
         private final AtomicInteger state = new AtomicInteger(0);
 
-        @Override
         public int getState() {
             return state.get();
         }
 
-        @Override
+        public AtomicInteger state() {
+            return state;
+        }
+
         public boolean compareAndSetState(int expectedState, int newState) {
             return state.compareAndSet(expectedState, newState);
+        }
+
+        public boolean compareAndSet(int expectedState, int newState) {
+            return state.compareAndSet(expectedState, newState);
+        }
+    }
+
+    public static final class DummyListener implements ConcurrentBag.IBagStateListener {
+
+        @Override
+        public Future<Boolean> addBagItem() {
+            return new Future<Boolean>() {
+
+                @Override
+                public boolean cancel(boolean mayInterruptIfRunning) {
+                    return false;
+                }
+
+                @Override
+                public boolean isCancelled() {
+                    return false;
+                }
+
+                @Override
+                public boolean isDone() {
+                    return false;
+                }
+
+                @Override
+                public Boolean get() throws InterruptedException, ExecutionException {
+                    System.out.println("You're gonna regret getting this future");
+                    for (;;) {Thread.sleep(1000L);}
+                }
+
+                @Override
+                public Boolean get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException {
+                    Thread.sleep(unit.toMillis(timeout));
+                    throw new TimeoutException();
+                }
+            };
         }
     }
 }
